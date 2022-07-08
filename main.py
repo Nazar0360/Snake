@@ -51,6 +51,7 @@ class Field:
 
     def print(self, pretty_print=True, debug=False):
         if pretty_print:
+            # hint: here you can change the design {0: ' ', 1: '#', 2: '$', 3: '%'}
             character_replacement = {0: '.', 1: '@', 2: '*', 3: '+'}
             for index in range(self.__field.shape[0]):
                 for _index in range(self.__field.shape[1]):
@@ -180,6 +181,9 @@ class Head:
     def pos(self, value):
         self.__previous_pos = self.pos
         self.__pos = np.array(value)
+
+        # hint: here you can turn off the increasing tail length and creating food, you can also set the value on which
+        # the head speed (moves per second [integer]) increases each time when the snake eats (False, False, 1)
         self.eat()
         self.__tail.update_pos()
 
@@ -282,13 +286,17 @@ def main():
     # the screen variable for a future
     screen = pg.display.set_mode((1, 1))
 
+    # hint: here you can change the field size (10, 10)
     field = Field((21, 21))
 
     # 2+ player mode have some bugs
+    # hint: here you can change the head position and its control (field, (0, 0), (pg.K_i, pg.K_k, pg.K_j, pg.K_l))
     Head(field, (9, 10))
     Head(field, (11, 10), (pg.K_w, pg.K_s, pg.K_a, pg.K_d))
 
     food = Food(field)
+
+    # hint: here you can change the amount of the food, and they position (5, (6, 9))
     food.create_food(3)
 
     while True:
@@ -303,6 +311,8 @@ def main():
 
         if use_console:
             system('cls')
+
+            # hint: here you can turn off the pretty print and turn on the debug print (False, True)
             field.print()
 
         time += 1
