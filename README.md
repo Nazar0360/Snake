@@ -4,7 +4,9 @@ Everyone knows [this](https://en.wikipedia.org/wiki/Snake_(video_game_genre)) ga
 
 ## Code
 
-If you want to change the game and its rules, and you don't want or can't understand the code, you can just find the following comment ```# hint: explanation (example)``` and change the value as in the example after the explanation.
+```main.py``` is the main file that runs the game, but it uses the console. If you don't need the console, run ```main.pyw``` instead.
+
+If you want to change the game and its rules, and you don't want or can't understand the code, you can just find the following comment ```# hint: explanation (example)``` (or ```'''hint: explanation (example)'''```) and change the value as in the example after the explanation.
 
 ## Discussions
 

@@ -1,7 +1,6 @@
 import pygame as pg
 import numpy as np
 from os import system
-from os.path import exists
 from typing import *
 
 time = 0
@@ -25,7 +24,7 @@ def in_array(array, value):
 class Field:
     def __init__(self, shape: tuple[int, int]):
         self.__snake_heads = []
-        self.__food = None
+        self.__boosts = None
         self.__field = np.zeros(shape, dtype=np.int8)
 
     def __str__(self) -> str:
@@ -37,6 +36,11 @@ class Field:
     def update(self):
         self.__field[:] = np.zeros(self.__field.shape, dtype=np.int8)
 
+        if self.boosts is not None:
+            for boost in self.boosts.boosts:
+                if all(boost[:-1] != np.array([-1, -1])):
+                    self.field[boost[0], boost[1]] = boost[2] + 4
+
         for head in self.__snake_heads:
             self.field[head.pos[0], head.pos[1]] = 1
 
@@ -44,15 +48,10 @@ class Field:
                 if all(element_pos != np.array([-1, -1])):
                     self.field[element_pos[0], element_pos[1]] = 2
 
-        if self.food is not None:
-            for element_pos in self.food.food_pos:
-                if all(element_pos != np.array([-1, -1])):
-                    self.field[element_pos[0], element_pos[1]] = 3
-
     def print(self, pretty_print=True, debug=False):
         if pretty_print:
-            # hint: here you can change the design {0: ' ', 1: '#', 2: '$', 3: '%'}
-            character_replacement = {0: '.', 1: '@', 2: '*', 3: '+'}
+            # hint: here you can change the design {0: ' ', 1: '#', 2: '$', 3: '%'...}
+            character_replacement = {0: '.', 1: '@', 2: '*', 3: '#', 4: '+', 5: '-', 6: '?'}
             for index in range(self.__field.shape[0]):
                 for _index in range(self.__field.shape[1]):
                     value = self.__field[index, _index]
@@ -75,12 +74,11 @@ class Field:
 
     def check_for_objects_at_the_position(self, pos, exclude_head=None) -> dict:
         """
-        It checks if there is a snake head, snake tail, or food at the position
+        It checks if there is a snake head, snake tail, or boost at the position
 
-        :param pos: The position to check for objects
-        :param exclude_head: This is the head of the snake that is currently moving. We don't want to check if the head
-        is in the position of the head that is currently moving
-        :return: A dictionary with the keys head, tail, and food.
+        :param pos: the position to check
+        :param exclude_head: The head to exclude from the check
+        :return: A dictionary with the keys head, tail, and boost.
         """
 
         pos = np.array(pos)
@@ -93,14 +91,17 @@ class Field:
                 tail_elements_pos = tail_elements_pos[1:]
             is_here_tail = in_array(tail_elements_pos, pos) or is_here_tail
 
-        if self.food is not None:
-            is_here_food = in_array(self.food.food_pos, pos)
-        else:
-            is_here_food = False
-        return dict(head=is_here_head, tail=is_here_tail, food=is_here_food)
+        is_here_boost = False
+        if self.boosts is not None:
+            for i in range(self.boosts.boost_types_number):
+                is_here_boost = in_array(self.boosts.boosts, np.append(pos, [i], 0))
+                if is_here_boost:
+                    break
+
+        return dict(head=is_here_head, tail=is_here_tail, boost=is_here_boost)
 
     def print_debug_info(self):
-        print({x: x.__dict__ for x in [self.__food]+self.__snake_heads})
+        print({x: x.__dict__ for x in [self.__boosts]+self.__snake_heads})
 
     @property
     def field(self):
@@ -111,15 +112,15 @@ class Field:
         self.__field = value
 
     @property
-    def food(self):
-        return self.__food
+    def boosts(self):
+        return self.__boosts
 
-    @food.setter
-    def food(self, food):
-        if isinstance(food, Food):
-            self.__food = food
+    @boosts.setter
+    def boosts(self, boosts):
+        if isinstance(boosts, Boosts):
+            self.__boosts = boosts
         else:
-            raise TypeError("food must be an instance of Food")
+            raise TypeError("boosts must be an instance of Boosts")
 
     @property
     def snake_heads(self):
@@ -137,14 +138,16 @@ class Head:
         self.__movement: np.array = np.zeros(2, dtype=np.int8)
 
         self.__is_alive = True
+        self.__score = 0
+
         self.__tail = Tail(self)
 
         self.__controls = list(controls)
 
     def move(self, move_anyway=False):
-        fps = min(clock.get_fps(), 120)
+        fps = min(clock.get_fps(), 10_000)
 
-        if fps > 0 == time % (fps // min(self.moves_per_second, int(clock.get_fps()))) or move_anyway:
+        if fps > 0 == time % (fps // min(self.moves_per_second, int(fps))) or move_anyway:
             next_pos = self.pos + self.movement
             if not self.check_for_obstacle(next_pos) and self.is_alive and any(self.movement != 0):
                 self.pos = self.pos + self.movement
@@ -154,7 +157,7 @@ class Head:
     def change_movement_direction(self, key):
         directions = {x: y for x, y in zip(self.__controls, [[-1, 0], [1, 0], [0, -1], [0, 1]])}
         if key in directions:
-            if any(self.pos + directions[key] != self.previous_pos):
+            if any(self.pos + directions[key] != self.previous_pos) or not len(self.tail.tail_elements_pos):
                 self.movement = directions[key]
 
     def check_for_obstacle(self, pos: Sequence) -> bool:
@@ -163,15 +166,25 @@ class Head:
         pos_is_tail = self.field.check_for_objects_at_the_position(pos)['tail']
         return any(pos + 1 > self.field.field.shape) or any(pos < 0) or pos_is_tail or pos_is_head
 
-    def eat(self, increase_tail_length=True, create_food=True, increase_speed=None):
-        if self.field.check_for_objects_at_the_position(self.pos)['food']:
-            if increase_tail_length:
-                self.__tail.add_new_element()
-            self.food.destroy_food_at_pos(self.pos)
-            if create_food:
-                self.food.create_food()
-            if increase_speed:
-                self.moves_per_second = self.moves_per_second + increase_speed
+    def eat(self, create_boost=True, increase_speed=0, increase_score=1):
+        if self.field.check_for_objects_at_the_position(self.pos)['boost']:
+            self.__score += increase_score
+
+            boost_type = self.boosts.destroy_boost_at_pos(self.pos)
+            match boost_type:
+                case 0:
+                    self.tail.add_new_element()
+
+                case 1:
+                    self.tail.delete_last_element()
+
+                case 2:
+                    self.tail.add_new_element(np.random.randint(-2, 2))
+
+            if create_boost:
+                self.boosts.create_boost()
+
+            self.moves_per_second = self.moves_per_second + increase_speed
 
     @property
     def pos(self):
@@ -182,8 +195,11 @@ class Head:
         self.__previous_pos = self.pos
         self.__pos = np.array(value)
 
-        # hint: here you can turn off the increasing tail length and creating food, you can also set the value on which
-        # the head speed (moves per second [integer]) increases each time when the snake eats (False, False, 1)
+        '''
+        hint: here you can turn off the creating boosts, you can also set the value by which
+        the head speed (moves per second [integer]) or score increases each time when the snake eats (False, 1, 5)
+        '''
+
         self.eat()
         self.__tail.update_pos()
 
@@ -212,8 +228,8 @@ class Head:
         return self.__tail
 
     @property
-    def food(self):
-        return self.__field.food
+    def boosts(self):
+        return self.__field.boosts
 
     @property
     def moves_per_second(self):
@@ -224,6 +240,10 @@ class Head:
         if isinstance(value, int) and value > 0:
             self.__moves_per_second = value
 
+    @property
+    def score(self):
+        return self.__score
+
 
 class Tail:
     def __init__(self, _head: Head):
@@ -231,9 +251,21 @@ class Tail:
         self.__tail_elements_pos: np.array = np.array([[-1, -1]])
 
     def add_new_element(self, amount=1):
+        if amount < 0:
+            self.delete_last_element(abs(amount))
+            return
+
         for _ in range(amount):
-            unprepared_array = np.append([-1, -1], self.__tail_elements_pos)
-            self.__tail_elements_pos = unprepared_array.reshape((unprepared_array.shape[0] // 2, 2))
+            self.__tail_elements_pos = np.append([[-1, -1]], self.__tail_elements_pos, 0)
+
+    def delete_last_element(self, amount=1):
+        if amount < 0:
+            self.add_new_element(abs(amount))
+            return
+
+        for _ in range(amount):
+            if len(self.tail_elements_pos) > 0:
+                self.__tail_elements_pos = np.delete(self.tail_elements_pos, 0, 0)
 
     def update_pos(self):
         """
@@ -253,35 +285,44 @@ class Tail:
         return self.__tail_elements_pos
 
 
-class Food:
+class Boosts:
     def __init__(self, _field: Field):
         self.__field = _field
-        self.__field.food = self
-        self.__food_pos = np.array([[-1, -1]], dtype=int)
+        self.__field.boosts = self
+        self.__boosts = np.array([[-1, -1, -1]], dtype=int)
+        self.__boost_types_number = 3
 
-    def create_food(self, amount=1, pos=None):
+    def create_boost(self, amount=1, pos=None, boost_type=None):
         for _ in range(amount):
-            if not pos:
-                _food_pos = np.random.randint(self.__field.field.shape)
-                while any(self.__field.check_for_objects_at_the_position(_food_pos).values()):
-                    _food_pos = np.random.randint(self.__field.field.shape)
-            else:
-                _food_pos = np.array(pos)
-            self.__food_pos = np.append(self.__food_pos, np.array([_food_pos]), 0)
+            if not boost_type:
+                boost_type = np.random.choice(self.__boost_types_number, 1, p=[.7, .2, .1])
 
-    def destroy_food_at_pos(self, pos):
-        self.__food_pos = np.delete(self.food_pos, find(self.food_pos, pos), 0)
+            if not pos:
+                _boost_pos = np.random.randint(self.__field.field.shape)
+                while any(self.__field.check_for_objects_at_the_position(_boost_pos).values()):
+                    _boost_pos = np.random.randint(self.__field.field.shape)
+            else:
+                _boost_pos = np.array(pos)
+
+            self.__boosts = np.append(self.__boosts, np.array([[*_boost_pos, boost_type]]), 0)
+
+    def destroy_boost_at_pos(self, pos):
+        for i in range(self.boost_types_number):
+            if index := find(self.boosts, np.append(pos, i)):
+                self.__boosts = np.delete(self.boosts, index, 0)
+                return i
 
     @property
-    def food_pos(self):
-        return self.__food_pos
+    def boosts(self):
+        return self.__boosts
+
+    @property
+    def boost_types_number(self):
+        return self.__boost_types_number
 
 
-def main():
+def main(use_console=True):
     global time
-
-    # this will be needed when the pygame screen is added
-    use_console = exists('.\\main.py')
 
     # the screen variable for a future
     screen = pg.display.set_mode((1, 1))
@@ -290,14 +331,16 @@ def main():
     field = Field((21, 21))
 
     # 2+ player mode have some bugs
-    # hint: here you can change the head position and its control (field, (0, 0), (pg.K_i, pg.K_k, pg.K_j, pg.K_l))
-    Head(field, (9, 10))
-    Head(field, (11, 10), (pg.K_w, pg.K_s, pg.K_a, pg.K_d))
+    '''
+    hint: here you can change the head position and its control (field, (0, 0), (pg.K_i, pg.K_k, pg.K_j, pg.K_l)).
+    You can also add a new snake (Head(field, (11, 10), (pg.K_w, pg.K_s, pg.K_a, pg.K_d))).
+    '''
+    Head(field, (10, 10))
 
-    food = Food(field)
+    boosts = Boosts(field)
 
-    # hint: here you can change the amount of the food, and they position (5, (6, 9))
-    food.create_food(3)
+    # hint: here you can change the amount of the boosts, they position and boost type (5, (6, 9), 0)
+    boosts.create_boost(3)
 
     while True:
         for event in pg.event.get():
@@ -309,8 +352,14 @@ def main():
         [head.move() for head in field.snake_heads]
         field.update()
 
+        pg.display.set_caption(f'FPS: {clock.get_fps()}')
+
         if use_console:
             system('cls')
+
+            for head in field.snake_heads:
+                print(f'Score: {head.score}\n'
+                      f'Tail length: {len(head.tail.tail_elements_pos)}\n')
 
             # hint: here you can turn off the pretty print and turn on the debug print (False, True)
             field.print()
