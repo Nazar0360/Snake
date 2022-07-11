@@ -25,6 +25,7 @@ class Field:
     def __init__(self, shape: tuple[int, int]):
         self.__snake_heads = []
         self.__boosts = None
+        self.__walls = None
         self.__field = np.zeros(shape, dtype=np.int8)
 
     def __str__(self) -> str:
@@ -47,6 +48,11 @@ class Field:
             for element_pos in head.tail.tail_elements_pos:
                 if all(element_pos != np.array([-1, -1])):
                     self.field[element_pos[0], element_pos[1]] = 2
+
+        if self.walls is not None:
+            for wall in self.walls.walls_pos:
+                if all(wall != np.array([-1, -1])):
+                    self.field[wall[0], wall[1]] = 3
 
     def print(self, pretty_print=True, debug=False):
         if pretty_print:
@@ -98,7 +104,28 @@ class Field:
                 if is_here_boost:
                     break
 
-        return dict(head=is_here_head, tail=is_here_tail, boost=is_here_boost)
+        is_here_wall = False
+        if self.walls is not None:
+            is_here_wall = in_array(self.walls.walls_pos, pos)
+
+        return dict(head=is_here_head, tail=is_here_tail, boost=is_here_boost, wall=is_here_wall)
+
+    def field_is_filled(self):
+        for y in range(self.__field.shape[0]):
+            for x in range(self.__field.shape[1]):
+                if not any(self.check_for_objects_at_the_position((y, x)).values()):
+                    return False
+        return True
+
+    def find_random_free_pos(self):
+        pos = np.random.randint(self.field.shape)
+
+        if self.field_is_filled():
+            return np.array([-1, -1], dtype=int)
+
+        while any(self.check_for_objects_at_the_position(pos).values()):
+            pos = np.random.randint(self.field.shape)
+        return pos
 
     def print_debug_info(self):
         print({x: x.__dict__ for x in [self.__boosts]+self.__snake_heads})
@@ -125,6 +152,15 @@ class Field:
     @property
     def snake_heads(self):
         return self.__snake_heads
+
+    @property
+    def walls(self):
+        return self.__walls
+
+    @walls.setter
+    def walls(self, value):
+        if isinstance(value, Walls):
+            self.__walls = value
 
 
 class Head:
@@ -162,11 +198,12 @@ class Head:
 
     def check_for_obstacle(self, pos: Sequence) -> bool:
         pos = np.array(pos)
-        pos_is_head = self.field.check_for_objects_at_the_position(pos, self)['head']
-        pos_is_tail = self.field.check_for_objects_at_the_position(pos)['tail']
-        return any(pos + 1 > self.field.field.shape) or any(pos < 0) or pos_is_tail or pos_is_head
+        pos_is_obstacle = [self.field.check_for_objects_at_the_position(pos, self)['head'],
+                           self.field.check_for_objects_at_the_position(pos)['tail'],
+                           self.field.check_for_objects_at_the_position(pos)['wall']]
+        return any(pos + 1 > self.field.field.shape) or any(pos < 0) or any(pos_is_obstacle)
 
-    def eat(self, create_boost=True, increase_speed=0, increase_score=1):
+    def eat(self, create_boost=True, create_wall=True, increase_speed=0, increase_score=1):
         if self.field.check_for_objects_at_the_position(self.pos)['boost']:
             self.__score += increase_score
 
@@ -184,6 +221,9 @@ class Head:
             if create_boost:
                 self.boosts.create_boost()
 
+            if create_wall:
+                self.walls.create_wall()
+
             self.moves_per_second = self.moves_per_second + increase_speed
 
     @property
@@ -196,8 +236,8 @@ class Head:
         self.__pos = np.array(value)
 
         '''
-        hint: here you can turn off the creating boosts, you can also set the value by which
-        the head speed (moves per second [integer]) or score increases each time when the snake eats (False, 1, 5)
+        hint: here you can turn off creating boosts or walls, you can also set the value by which
+        the head speed (moves per second [integer]) or score increases each time when the snake eats (False, False 1, 5)
         '''
 
         self.eat()
@@ -230,6 +270,10 @@ class Head:
     @property
     def boosts(self):
         return self.__field.boosts
+
+    @property
+    def walls(self):
+        return self.field.walls
 
     @property
     def moves_per_second(self):
@@ -298,19 +342,17 @@ class Boosts:
                 boost_type = np.random.choice(self.__boost_types_number, 1, p=[.7, .2, .1])
 
             if not pos:
-                _boost_pos = np.random.randint(self.__field.field.shape)
-                while any(self.__field.check_for_objects_at_the_position(_boost_pos).values()):
-                    _boost_pos = np.random.randint(self.__field.field.shape)
+                _boost_pos = self.__field.find_random_free_pos()
             else:
                 _boost_pos = np.array(pos)
 
             self.__boosts = np.append(self.__boosts, np.array([[*_boost_pos, boost_type]]), 0)
 
     def destroy_boost_at_pos(self, pos):
-        for i in range(self.boost_types_number):
-            if index := find(self.boosts, np.append(pos, i)):
+        for boost_type in range(self.boost_types_number):
+            if index := find(self.boosts, np.append(pos, boost_type)):
                 self.__boosts = np.delete(self.boosts, index, 0)
-                return i
+                return boost_type
 
     @property
     def boosts(self):
@@ -319,6 +361,26 @@ class Boosts:
     @property
     def boost_types_number(self):
         return self.__boost_types_number
+
+
+class Walls:
+    def __init__(self, _field: Field):
+        self.__field = _field
+        self.__field.walls = self
+        self.__walls_pos = np.array([[-1, -1]], dtype=int)
+
+    def create_wall(self, amount=1, pos=None):
+        for _ in range(amount):
+            if not pos:
+                _wall_pos = self.__field.find_random_free_pos()
+            else:
+                _wall_pos = np.array(pos)
+
+            self.__walls_pos = np.append(self.__walls_pos, np.array([_wall_pos]), 0)
+
+    @property
+    def walls_pos(self):
+        return self.__walls_pos
 
 
 def main(use_console=True):
@@ -338,6 +400,7 @@ def main(use_console=True):
     Head(field, (10, 10))
 
     boosts = Boosts(field)
+    Walls(field)
 
     # hint: here you can change the amount of the boosts, they position and boost type (5, (6, 9), 0)
     boosts.create_boost(3)
