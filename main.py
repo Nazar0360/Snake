@@ -22,11 +22,12 @@ def in_array(array, value):
 
 
 class Field:
-    def __init__(self, shape: tuple[int, int]):
+    def __init__(self, shape: tuple[int, int], field_boundaries_is_deadly=False):
         self.__snake_heads = []
         self.__boosts = None
         self.__walls = None
         self.__field = np.zeros(shape, dtype=np.int8)
+        self.__field_boundaries_is_deadly = bool(field_boundaries_is_deadly)
 
     def __str__(self) -> str:
         return f'{self.__field}'
@@ -127,8 +128,28 @@ class Field:
             pos = np.random.randint(self.field.shape)
         return pos
 
+    def is_out_of_field(self, pos):
+        """
+        If the position is out of the field, return the direction in which it is out of the field
+
+        :param pos: the position of the agent
+        :return: A tuple of two values, one for each axis.
+        """
+
+        pos = np.array(pos)
+        direction: list[int, int] = [0, 0]
+
+        for i in range(2):
+            if pos[i] + 1 > self.field.shape[i]:
+                direction[i] = 1
+                print(9)
+            elif pos[i] < 0:
+                direction[i] = -1
+
+        return tuple(direction)
+
     def print_debug_info(self):
-        print({x: x.__dict__ for x in [self.__boosts]+self.__snake_heads})
+        print({x: x.__dict__ for x in [self.__boosts] + self.__snake_heads})
 
     @property
     def field(self):
@@ -162,10 +183,19 @@ class Field:
         if isinstance(value, Walls):
             self.__walls = value
 
+    @property
+    def field_boundaries_is_deadly(self):
+        return self.__field_boundaries_is_deadly
+
+    @field_boundaries_is_deadly.setter
+    def field_boundaries_is_deadly(self, value):
+        self.__field_boundaries_is_deadly = bool(value)
+
 
 class Head:
-    def __init__(self, _field: Field, pos=(0, 0), controls=(pg.K_UP, pg.K_DOWN, pg.K_LEFT, pg.K_RIGHT)):
-        self.__moves_per_second = 5
+    def __init__(self, _field: Field, pos=(0, 0), moves_per_second=5,
+                 controls=(pg.K_UP, pg.K_DOWN, pg.K_LEFT, pg.K_RIGHT)):
+        self.__moves_per_second = moves_per_second
         self.__field = _field
         self.__field.add_snake(self)
 
@@ -201,7 +231,8 @@ class Head:
         pos_is_obstacle = [self.field.check_for_objects_at_the_position(pos, self)['head'],
                            self.field.check_for_objects_at_the_position(pos)['tail'],
                            self.field.check_for_objects_at_the_position(pos)['wall']]
-        return any(pos + 1 > self.field.field.shape) or any(pos < 0) or any(pos_is_obstacle)
+        return ((any(pos + 1 > self.field.field.shape) or any(pos < 0))
+                and self.field.field_boundaries_is_deadly) or any(pos_is_obstacle)
 
     def eat(self, create_boost=True, create_wall=True, increase_speed=0, increase_score=1):
         if self.field.check_for_objects_at_the_position(self.pos)['boost']:
@@ -233,7 +264,20 @@ class Head:
     @pos.setter
     def pos(self, value):
         self.__previous_pos = self.pos
-        self.__pos = np.array(value)
+
+        value = np.array(value)
+
+        if any(directions := self.field.is_out_of_field(value)):
+            for i in range(2):
+                if directions[i] == 1:
+                    value[i] = 0
+                elif directions[i] == -1:
+                    value[i] = self.field.field.shape[i] - 1
+
+        if self.check_for_obstacle(value):
+            self.__is_alive = False
+        else:
+            self.__pos = value
 
         '''
         hint: here you can turn off creating boosts or walls, you can also set the value by which
@@ -389,13 +433,17 @@ def main(use_console=True):
     # the screen variable for a future
     screen = pg.display.set_mode((1, 1))
 
-    # hint: here you can change the field size (10, 10)
+    # hint: here you can change the field size (10, 10) and turn on the lethality of the field boundaries
     field = Field((21, 21))
 
     # 2+ player mode have some bugs
     '''
-    hint: here you can change the head position and its control (field, (0, 0), (pg.K_i, pg.K_k, pg.K_j, pg.K_l)).
-    You can also add a new snake (Head(field, (11, 10), (pg.K_w, pg.K_s, pg.K_a, pg.K_d))).
+    hint:
+        here you can change the head position, its moves per second and its control:
+            (field, (0, 0), 7, (pg.K_i, pg.K_k, pg.K_j, pg.K_l)).
+    
+        You can also add a new snake:
+            (Head(field, (11, 10), 1, (pg.K_w, pg.K_s, pg.K_a, pg.K_d))).
     '''
     Head(field, (10, 10))
 
