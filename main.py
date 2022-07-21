@@ -2,6 +2,7 @@ import pygame as pg
 import numpy as np
 from os import system
 from typing import *
+import sys
 
 time = 0
 
@@ -9,9 +10,11 @@ pg.init()
 clock = pg.time.Clock()
 
 
-def find(array, value):
+def find(array, value, _slice=None):
+    if _slice is None:
+        _slice = (0, array.shape[1])
     for index, element in enumerate(array):
-        if list(element) == list(value):
+        if list(element)[_slice[0]:_slice[1]] == list(value):
             return index
     return []
 
@@ -19,6 +22,12 @@ def find(array, value):
 # just “in” doesn't work correctly
 def in_array(array, value):
     return list(value) in list(map(lambda x: list(x), array))
+
+
+def colored(r, g, b, text):
+    text = str(text)
+    r, g, b = int(r), int(g), int(b)
+    return f"\033[38;2;{r};{g};{b}m{text}\033[38;2;255;255;255m"
 
 
 class Field:
@@ -57,16 +66,23 @@ class Field:
 
     def print(self, pretty_print=True, debug=False):
         if pretty_print:
-            # hint: here you can change the design {0: ' ', 1: '#', 2: '$', 3: '%'...}
-            character_replacement = {0: '.', 1: '@', 2: '*', 3: '#', 4: '+', 5: '-', 6: '?'}
+            # hint: here you can change the design {0: ' ', 1: '#', 2: '$', 3: colored(143, 213, 64, '%')...}
+            # *("colored" colors the text using RGB format colored(r, g, b, text))
+            character_replacement = {0: colored(127, 127, 127, '.'),
+                                     1: colored(15, 127, 255, '@'),
+                                     2: colored(63, 127, 255, '*'),
+                                     3: colored(255, 63, 15, '#'),
+                                     4: colored(15, 255, 63, '+'),
+                                     5: colored(255, 127, 15, '-'),
+                                     6: colored(255, 63, 255, '?')}
+            str_field = ''
             for index in range(self.__field.shape[0]):
                 for _index in range(self.__field.shape[1]):
                     value = self.__field[index, _index]
-                    if value in character_replacement:
-                        print(character_replacement[value], end=' ')
-                    else:
-                        print(value, end=' ')
-                print()
+                    str_field = str_field + character_replacement.get(value, value) + ' '
+                str_field = str_field + '\n'
+            sys.stdout.writelines(str_field)
+
         else:
             print(self)
 
@@ -142,14 +158,15 @@ class Field:
         for i in range(2):
             if pos[i] + 1 > self.field.shape[i]:
                 direction[i] = 1
-                print(9)
             elif pos[i] < 0:
                 direction[i] = -1
 
         return tuple(direction)
 
     def print_debug_info(self):
-        print({x: x.__dict__ for x in [self.__boosts] + self.__snake_heads})
+        print(((self.field.size - self.walls.walls_pos.shape[0]) / self.field.size) ** 2)
+        print(self.walls.walls_pos.shape[0])
+        # print({x: x.__dict__ for x in [self.__boosts] + self.__snake_heads})
 
     @property
     def field(self):
@@ -234,7 +251,7 @@ class Head:
         return ((any(pos + 1 > self.field.field.shape) or any(pos < 0))
                 and self.field.field_boundaries_is_deadly) or any(pos_is_obstacle)
 
-    def eat(self, create_boost=True, create_wall=True, increase_speed=0, increase_score=1):
+    def eat(self, boost_amount_to_be_created=1, wall_amount_to_be_created=1, increase_speed=0, increase_score=1):
         if self.field.check_for_objects_at_the_position(self.pos)['boost']:
             self.__score += increase_score
 
@@ -249,11 +266,11 @@ class Head:
                 case 2:
                     self.tail.add_new_element(np.random.randint(-2, 2))
 
-            if create_boost:
-                self.boosts.create_boost()
+            self.boosts.create_boost(boost_amount_to_be_created)
 
-            if create_wall:
-                self.walls.create_wall()
+            chance = ((self.field.field.size - self.field.walls.walls_pos.shape[0]) / self.field.field.size) ** 2
+            if np.random.choice([0, 1], 1, p=[1 - chance, chance]):
+                self.walls.create_wall(wall_amount_to_be_created)
 
             self.moves_per_second = self.moves_per_second + increase_speed
 
@@ -263,16 +280,17 @@ class Head:
 
     @pos.setter
     def pos(self, value):
-        self.__previous_pos = self.pos
-
         value = np.array(value)
 
-        if any(directions := self.field.is_out_of_field(value)):
-            for i in range(2):
-                if directions[i] == 1:
-                    value[i] = 0
-                elif directions[i] == -1:
-                    value[i] = self.field.field.shape[i] - 1
+        if not self.check_for_obstacle(value):
+            self.__previous_pos = self.pos
+
+            if any(directions := self.field.is_out_of_field(value)):
+                for i in range(2):
+                    if directions[i] == 1:
+                        value[i] = 0
+                    elif directions[i] == -1:
+                        value[i] = self.field.field.shape[i] - 1
 
         if self.check_for_obstacle(value):
             self.__is_alive = False
@@ -280,8 +298,8 @@ class Head:
             self.__pos = value
 
         '''
-        hint: here you can turn off creating boosts or walls, you can also set the value by which
-        the head speed (moves per second [integer]) or score increases each time when the snake eats (False, False 1, 5)
+        hint: here you can set the value by which the number of boosts or walls or the head speed (moves per 
+        second [integer]) or score increases each time when the snake eats (2, 3, 1, 5)
         '''
 
         self.eat()
@@ -377,16 +395,19 @@ class Boosts:
     def __init__(self, _field: Field):
         self.__field = _field
         self.__field.boosts = self
-        self.__boosts = np.array([[-1, -1, -1]], dtype=int)
+        self.__boosts = np.array([[-1, -1, 0]], dtype=int)
         self.__boost_types_number = 3
 
     def create_boost(self, amount=1, pos=None, boost_type=None):
         for _ in range(amount):
-            if not boost_type:
-                boost_type = np.random.choice(self.__boost_types_number, 1, p=[.7, .2, .1])
+            if boost_type is None:
+                boost_type = np.random.choice(self.__boost_types_number, 1, p=[.85, .1, .05])
 
             if not pos:
-                _boost_pos = self.__field.find_random_free_pos()
+                if list(random_free_pos := self.__field.find_random_free_pos()) != [-1, -1]:
+                    _boost_pos = random_free_pos
+                else:
+                    break
             else:
                 _boost_pos = np.array(pos)
 
@@ -394,7 +415,7 @@ class Boosts:
 
     def destroy_boost_at_pos(self, pos):
         for boost_type in range(self.boost_types_number):
-            if index := find(self.boosts, np.append(pos, boost_type)):
+            if not (index := find(self.boosts, np.append(pos, boost_type))) == []:
                 self.__boosts = np.delete(self.boosts, index, 0)
                 return boost_type
 
@@ -414,6 +435,9 @@ class Walls:
         self.__walls_pos = np.array([[-1, -1]], dtype=int)
 
     def create_wall(self, amount=1, pos=None):
+        if amount < 0:
+            self.delete_random_wall(abs(amount))
+
         for _ in range(amount):
             if not pos:
                 _wall_pos = self.__field.find_random_free_pos()
@@ -421,6 +445,14 @@ class Walls:
                 _wall_pos = np.array(pos)
 
             self.__walls_pos = np.append(self.__walls_pos, np.array([_wall_pos]), 0)
+
+    def delete_random_wall(self, amount=1):
+        if amount < 0:
+            self.create_wall(abs(amount))
+
+        for _ in range(amount):
+            if len(self.__walls_pos) > 0:
+                self.__walls_pos = np.delete(self.__walls_pos, np.random.randint(self.__walls_pos.shape[0]), 0)
 
     @property
     def walls_pos(self):
@@ -434,7 +466,7 @@ def main(use_console=True):
     screen = pg.display.set_mode((1, 1))
 
     # hint: here you can change the field size (10, 10) and turn on the lethality of the field boundaries
-    field = Field((21, 21))
+    field = Field((19, 19))
 
     # 2+ player mode have some bugs
     '''
@@ -445,7 +477,7 @@ def main(use_console=True):
         You can also add a new snake:
             (Head(field, (11, 10), 1, (pg.K_w, pg.K_s, pg.K_a, pg.K_d))).
     '''
-    Head(field, (10, 10))
+    Head(field, (9, 9))
 
     boosts = Boosts(field)
     Walls(field)
@@ -465,15 +497,15 @@ def main(use_console=True):
 
         pg.display.set_caption(f'FPS: {clock.get_fps()}')
 
-        if use_console:
+        if use_console and any([obj.is_alive for obj in field.snake_heads]):
             system('cls')
 
             for head in field.snake_heads:
-                print(f'Score: {head.score}\n'
-                      f'Tail length: {len(head.tail.tail_elements_pos)}\n')
+                sys.stdout.writelines(f'Score: {colored(0, 127, 255, head.score)}\n'
+                                      f'Tail length: {colored(127, 255, 63, len(head.tail.tail_elements_pos))}\n')
 
             # hint: here you can turn off the pretty print and turn on the debug print (False, True)
-            field.print()
+            field.print(debug=False)
 
         time += 1
         clock.tick()
