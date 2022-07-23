@@ -54,11 +54,13 @@ class Field:
                     self.field[boost[0], boost[1]] = boost[2] + 4
 
         for head in self.__snake_heads:
-            self.field[head.pos[0], head.pos[1]] = 1
+            if head.is_alive:
+                for element_pos in head.tail.tail_elements_pos:
+                    if all(element_pos != np.array([-1, -1])):
+                        self.field[element_pos[0], element_pos[1]] = 2
 
-            for element_pos in head.tail.tail_elements_pos:
-                if all(element_pos != np.array([-1, -1])):
-                    self.field[element_pos[0], element_pos[1]] = 2
+        for head in self.__snake_heads:
+            self.field[head.pos[0], head.pos[1]] = 1
 
         if self.walls is not None:
             for wall in self.walls.walls_pos:
@@ -75,7 +77,8 @@ class Field:
                                      3: colored(255, 63, 15, '#'),
                                      4: colored(15, 255, 63, '+'),
                                      5: colored(63, 255, 255, '-'),
-                                     6: colored(255, 63, 255, '?')}
+                                     6: colored(255, 63, 255, '?'),
+                                     7: colored(63, 31, 255, '&')}
             str_field = '\n'
             for index in range(self.__field.shape[0]):
                 for _index in range(self.__field.shape[1]):
@@ -96,24 +99,29 @@ class Field:
         else:
             raise TypeError('head must be an instance of Head')
 
-    def check_for_objects_at_the_position(self, pos, exclude_head=None) -> dict:
+    def check_for_objects_at_the_position(self, pos, current_snake=None) -> dict:
         """
-        It checks if there is a snake head, snake tail, or boost at the position
+        It checks if there's a snake head, tail, boost or wall at the given position
 
         :param pos: the position to check
-        :param exclude_head: The head to exclude from the check
-        :return: A dictionary with the keys head, tail, and boost.
+        :param current_snake: the snake that is currently being checked for collisions
+        :return: A dictionary with the following keys: head, tail, boost, wall.
         """
 
         pos = np.array(pos)
         is_here_head = is_here_tail = False
         for head in self.__snake_heads:
-            if head is not exclude_head:
+            if (current_snake is not None and current_snake.contact_with_other_snakes) and head is not current_snake:
                 is_here_head = all(head.pos == pos) or is_here_head
-            tail_elements_pos = head.tail.tail_elements_pos
-            if head.is_alive:
-                tail_elements_pos = tail_elements_pos[1:]
-            is_here_tail = in_array(tail_elements_pos, pos) or is_here_tail
+
+            if current_snake is None or current_snake.contact_with_other_snakes:
+                tail_elements_pos = head.tail.tail_elements_pos
+                if head.is_alive:
+                    tail_elements_pos = tail_elements_pos[1:]
+                is_here_tail = is_here_tail or in_array(tail_elements_pos, pos)
+            else:
+                tail_elements_pos = current_snake.tail.tail_elements_pos[1:]
+                is_here_tail = is_here_tail or in_array(tail_elements_pos, pos)
 
         is_here_boost = False
         if self.boosts is not None:
@@ -229,7 +237,7 @@ class Head:
     __snakes_number: int = 0
 
     def __init__(self, _field: Field, pos=(0, 0), moves_per_second=4,
-                 controls=(pg.K_w, pg.K_s, pg.K_a, pg.K_d), name=None):
+                 controls=(pg.K_w, pg.K_s, pg.K_a, pg.K_d), name=None, contact_with_other_snakes=False):
         if name is None:
             self.__name = f'Snake{Head.__snakes_number}'
         else:
@@ -246,6 +254,8 @@ class Head:
         self.__start_pos = self.__pos
         self.__movement: np.array = np.zeros(2, dtype=np.int8)
 
+        self.__contact_with_other_snakes = contact_with_other_snakes
+
         self.__is_alive = True
         self.__score = 0
 
@@ -261,7 +271,7 @@ class Head:
 
         if fps > 0 == time % (fps // min(self.moves_per_second, int(fps))) or move_anyway:
             if not self.check_for_obstacle(self.next_pos()) and self.is_alive and any(self.movement != 0):
-                self.pos = self.next_pos()
+                self.pos = (self.pos + self.movement)
             elif self.check_for_obstacle(self.next_pos()):
                 self.__is_alive = False
 
@@ -271,14 +281,14 @@ class Head:
         if key in directions:
             next_pos = self.field.normalized_pos(self.pos + directions[key])
 
-            if any(next_pos != self.previous_pos) or not len(self.tail.tail_elements_pos):
+            if any(next_pos != self.previous_pos):
                 self.movement = directions[key]
 
     def check_for_obstacle(self, pos: Sequence) -> bool:
         pos = np.array(pos)
         pos_is_obstacle = [self.field.check_for_objects_at_the_position(pos, self)['head'],
-                           self.field.check_for_objects_at_the_position(pos)['tail'],
-                           self.field.check_for_objects_at_the_position(pos)['wall']]
+                           self.field.check_for_objects_at_the_position(pos, self)['tail'],
+                           self.field.check_for_objects_at_the_position(pos, self)['wall']]
         return ((any(pos + 1 > self.field.field.shape) or any(pos < 0))
                 and self.field.field_boundaries_is_deadly) or any(pos_is_obstacle)
 
@@ -300,9 +310,17 @@ class Head:
                     self.tail.add_new_element(elements_number)
                     self.__score += elements_number * increase_score + efficiency
 
+                case 3:
+                    wall_amount_to_be_destroyed = self.walls.walls_pos.size // 4
+                    self.walls.delete_random_wall(wall_amount_to_be_destroyed)
+
+                    self.__score -= wall_amount_to_be_destroyed // 2
+
             self.boosts.create_boost(boost_amount_to_be_created)
 
-            chance = ((self.field.field.size - self.field.walls.walls_pos.shape[0]) / self.field.field.size) ** 2
+            chance = (((self.field.field.size - self.field.walls.walls_pos.shape[0])
+                       / self.field.field.size)
+                      ** (len(self.field.snake_heads) + 1))
             if np.random.choice([0, 1], 1, p=[1 - chance, chance]):
                 self.walls.create_wall(wall_amount_to_be_created)
 
@@ -328,7 +346,7 @@ class Head:
 
         if not self.check_for_obstacle(value):
             self.__previous_pos = self.pos
-            self.__pos = value
+            self.__pos = self.field.normalized_pos(value)
         else:
             self.__is_alive = False
 
@@ -397,6 +415,10 @@ class Head:
     def name(self, new_name):
         self.__name = str(new_name)
 
+    @property
+    def contact_with_other_snakes(self):
+        return self.__contact_with_other_snakes
+
 
 class Tail:
     def __init__(self, _head: Head):
@@ -417,7 +439,7 @@ class Tail:
             return
 
         for _ in range(amount):
-            if len(self.tail_elements_pos) > 0:
+            if len(self.tail_elements_pos) > 1:
                 self.__tail_elements_pos = np.delete(self.tail_elements_pos, 0, 0)
 
     def update_pos(self):
@@ -452,12 +474,12 @@ class Boosts:
         self.__field = _field
         self.__field.boosts = self
         self.__boosts = np.empty(shape=(0, 3), dtype=int)
-        self.__boost_types_number = 3
+        self.__boost_types_number = 4
 
     def create_boost(self, amount=1, pos=None, boost_type=None):
         for _ in range(amount):
             if boost_type is None:
-                _boost_type = np.random.choice(self.__boost_types_number, 1, p=[.85, .1, .05])
+                _boost_type = np.random.choice(self.__boost_types_number, 1, p=[.70, .15, .1, .05])
             else:
                 _boost_type = boost_type
 
@@ -532,10 +554,11 @@ def main(use_console=True):
     # hint: here you can change the field size (10, 10) and turn on the lethality of the field boundaries
     field = Field((19, 19))
 
-    # 2+ player mode have some bugs
+    # 2+ player mode may have some bugs
     '''
     hint:
-        here you can change the head position, its moves per second and its control:
+        here you can change the head position, its moves per second, its controls, name 
+        and turn on contacting with other snakes:
             (field, (0, 0), 7, (pg.K_i, pg.K_k, pg.K_j, pg.K_l)).
     
         You can also add a new snake:
@@ -558,7 +581,7 @@ def main(use_console=True):
                     if not pause:
                         head.change_movement_direction(event.key)
 
-                if event.key == pg.K_p:
+                if event.key == pg.K_p or event.key == pg.K_SPACE:
                     pause = not pause
 
                 if event.key == pg.K_r:
