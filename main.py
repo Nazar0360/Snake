@@ -1,10 +1,11 @@
-import pygame as pg
-import numpy as np
 from os import system
 from typing import *
+import pygame as pg
+import numpy as np
 import sys
 
 time = 0
+pause = False
 
 pg.init()
 clock = pg.time.Clock()
@@ -69,18 +70,18 @@ class Field:
             # hint: here you can change the design {0: ' ', 1: '#', 2: '$', 3: colored(143, 213, 64, '%')...}
             # *("colored" colors the text using RGB format colored(r, g, b, text))
             character_replacement = {0: colored(127, 127, 127, '.'),
-                                     1: colored(15, 127, 255, '@'),
-                                     2: colored(63, 127, 255, '*'),
+                                     1: colored(4, 225, 1, '@'),
+                                     2: colored(34, 255, 31, '*'),
                                      3: colored(255, 63, 15, '#'),
                                      4: colored(15, 255, 63, '+'),
-                                     5: colored(255, 127, 15, '-'),
+                                     5: colored(63, 255, 255, '-'),
                                      6: colored(255, 63, 255, '?')}
-            str_field = ''
+            str_field = '\n'
             for index in range(self.__field.shape[0]):
                 for _index in range(self.__field.shape[1]):
                     value = self.__field[index, _index]
-                    str_field = str_field + character_replacement.get(value, value) + ' '
-                str_field = str_field + '\n'
+                    str_field = str_field + character_replacement.get(value, str(value)) + ' '
+                str_field += '\n'
             sys.stdout.writelines(str_field)
 
         else:
@@ -164,9 +165,24 @@ class Field:
         return tuple(direction)
 
     def print_debug_info(self):
-        print(((self.field.size - self.walls.walls_pos.shape[0]) / self.field.size) ** 2)
-        print(self.walls.walls_pos.shape[0])
-        # print({x: x.__dict__ for x in [self.__boosts] + self.__snake_heads})
+        print({x: x.__dict__ for x in [self.__boosts] + self.__snake_heads})
+
+    def reset_all(self):
+        for head in self.snake_heads:
+            head.reset()
+
+        self.boosts.reset()
+        self.walls.reset()
+
+    def normalized_pos(self, pos) -> np.array:
+        pos = np.array(pos)
+
+        if any(directions := self.is_out_of_field(pos)):
+            for i in range(2):
+                _ = {1: 0, -1: self.field.shape[i] - 1}
+                pos[i] = _.get(directions[i], pos[i])
+
+        return pos
 
     @property
     def field(self):
@@ -210,14 +226,24 @@ class Field:
 
 
 class Head:
-    def __init__(self, _field: Field, pos=(0, 0), moves_per_second=5,
-                 controls=(pg.K_UP, pg.K_DOWN, pg.K_LEFT, pg.K_RIGHT)):
+    __snakes_number: int = 0
+
+    def __init__(self, _field: Field, pos=(0, 0), moves_per_second=4,
+                 controls=(pg.K_w, pg.K_s, pg.K_a, pg.K_d), name=None):
+        if name is None:
+            self.__name = f'Snake{Head.__snakes_number}'
+        else:
+            self.__name = str(name)
+
+        Head.__snakes_number += 1
+
         self.__moves_per_second = moves_per_second
         self.__field = _field
         self.__field.add_snake(self)
 
         self.__pos: np.array = np.array(pos)
         self.__previous_pos = np.array([-1, -1])
+        self.__start_pos = self.__pos
         self.__movement: np.array = np.zeros(2, dtype=np.int8)
 
         self.__is_alive = True
@@ -227,20 +253,25 @@ class Head:
 
         self.__controls = list(controls)
 
+    def next_pos(self) -> np.array:
+        return self.field.normalized_pos(self.pos + self.movement)
+
     def move(self, move_anyway=False):
         fps = min(clock.get_fps(), 10_000)
 
         if fps > 0 == time % (fps // min(self.moves_per_second, int(fps))) or move_anyway:
-            next_pos = self.pos + self.movement
-            if not self.check_for_obstacle(next_pos) and self.is_alive and any(self.movement != 0):
-                self.pos = self.pos + self.movement
-            elif self.check_for_obstacle(next_pos):
+            if not self.check_for_obstacle(self.next_pos()) and self.is_alive and any(self.movement != 0):
+                self.pos = self.next_pos()
+            elif self.check_for_obstacle(self.next_pos()):
                 self.__is_alive = False
 
     def change_movement_direction(self, key):
         directions = {x: y for x, y in zip(self.__controls, [[-1, 0], [1, 0], [0, -1], [0, 1]])}
+
         if key in directions:
-            if any(self.pos + directions[key] != self.previous_pos) or not len(self.tail.tail_elements_pos):
+            next_pos = self.field.normalized_pos(self.pos + directions[key])
+
+            if any(next_pos != self.previous_pos) or not len(self.tail.tail_elements_pos):
                 self.movement = directions[key]
 
     def check_for_obstacle(self, pos: Sequence) -> bool:
@@ -253,18 +284,21 @@ class Head:
 
     def eat(self, boost_amount_to_be_created=1, wall_amount_to_be_created=1, increase_speed=0, increase_score=1):
         if self.field.check_for_objects_at_the_position(self.pos)['boost']:
-            self.__score += increase_score
 
             boost_type = self.boosts.destroy_boost_at_pos(self.pos)
             match boost_type:
                 case 0:
                     self.tail.add_new_element()
+                    self.__score += increase_score
 
                 case 1:
                     self.tail.delete_last_element()
 
                 case 2:
-                    self.tail.add_new_element(np.random.randint(-2, 2))
+                    efficiency = np.random.randint(-1, 1)
+                    elements_number = np.random.randint(-2, 2)
+                    self.tail.add_new_element(elements_number)
+                    self.__score += elements_number * increase_score + efficiency
 
             self.boosts.create_boost(boost_amount_to_be_created)
 
@@ -272,7 +306,17 @@ class Head:
             if np.random.choice([0, 1], 1, p=[1 - chance, chance]):
                 self.walls.create_wall(wall_amount_to_be_created)
 
-            self.moves_per_second = self.moves_per_second + increase_speed
+            self.moves_per_second += increase_speed
+
+    def reset(self):
+        self.__is_alive = True
+        self.__score = 0
+
+        self.__pos = self.start_pos
+        self.__previous_pos = np.array([-1, -1])
+        self.__movement = np.zeros(2, dtype=np.int8)
+
+        self.tail.reset()
 
     @property
     def pos(self):
@@ -284,18 +328,9 @@ class Head:
 
         if not self.check_for_obstacle(value):
             self.__previous_pos = self.pos
-
-            if any(directions := self.field.is_out_of_field(value)):
-                for i in range(2):
-                    if directions[i] == 1:
-                        value[i] = 0
-                    elif directions[i] == -1:
-                        value[i] = self.field.field.shape[i] - 1
-
-        if self.check_for_obstacle(value):
-            self.__is_alive = False
-        else:
             self.__pos = value
+        else:
+            self.__is_alive = False
 
         '''
         hint: here you can set the value by which the number of boosts or walls or the head speed (moves per 
@@ -350,6 +385,18 @@ class Head:
     def score(self):
         return self.__score
 
+    @property
+    def start_pos(self):
+        return self.__start_pos
+
+    @property
+    def name(self):
+        return self.__name
+
+    @name.setter
+    def name(self, new_name):
+        self.__name = str(new_name)
+
 
 class Tail:
     def __init__(self, _head: Head):
@@ -386,22 +433,33 @@ class Tail:
                 else:
                     self.__tail_elements_pos[index] = self.__tail_elements_pos[index + 1]
 
+    def reset(self):
+        self.__tail_elements_pos = np.array([[-1, -1]])
+
     @property
     def tail_elements_pos(self):
         return self.__tail_elements_pos
+
+    @tail_elements_pos.setter
+    def tail_elements_pos(self, value):
+        value = np.array(value)
+
+        self.__tail_elements_pos = value
 
 
 class Boosts:
     def __init__(self, _field: Field):
         self.__field = _field
         self.__field.boosts = self
-        self.__boosts = np.array([[-1, -1, 0]], dtype=int)
+        self.__boosts = np.empty(shape=(0, 3), dtype=int)
         self.__boost_types_number = 3
 
     def create_boost(self, amount=1, pos=None, boost_type=None):
         for _ in range(amount):
             if boost_type is None:
-                boost_type = np.random.choice(self.__boost_types_number, 1, p=[.85, .1, .05])
+                _boost_type = np.random.choice(self.__boost_types_number, 1, p=[.85, .1, .05])
+            else:
+                _boost_type = boost_type
 
             if not pos:
                 if list(random_free_pos := self.__field.find_random_free_pos()) != [-1, -1]:
@@ -411,13 +469,16 @@ class Boosts:
             else:
                 _boost_pos = np.array(pos)
 
-            self.__boosts = np.append(self.__boosts, np.array([[*_boost_pos, boost_type]]), 0)
+            self.__boosts = np.append(self.__boosts, np.array([[*_boost_pos, _boost_type]]), 0)
 
     def destroy_boost_at_pos(self, pos):
         for boost_type in range(self.boost_types_number):
             if not (index := find(self.boosts, np.append(pos, boost_type))) == []:
                 self.__boosts = np.delete(self.boosts, index, 0)
                 return boost_type
+
+    def reset(self):
+        self.__boosts = np.empty(shape=(0, 3), dtype=int)
 
     @property
     def boosts(self):
@@ -432,7 +493,7 @@ class Walls:
     def __init__(self, _field: Field):
         self.__field = _field
         self.__field.walls = self
-        self.__walls_pos = np.array([[-1, -1]], dtype=int)
+        self.__walls_pos = np.empty(shape=(0, 2), dtype=int)
 
     def create_wall(self, amount=1, pos=None):
         if amount < 0:
@@ -454,13 +515,16 @@ class Walls:
             if len(self.__walls_pos) > 0:
                 self.__walls_pos = np.delete(self.__walls_pos, np.random.randint(self.__walls_pos.shape[0]), 0)
 
+    def reset(self):
+        self.__walls_pos = np.empty(shape=(0, 2), dtype=int)
+
     @property
     def walls_pos(self):
         return self.__walls_pos
 
 
 def main(use_console=True):
-    global time
+    global time, pause
 
     # the screen variable for a future
     screen = pg.display.set_mode((1, 1))
@@ -488,27 +552,45 @@ def main(use_console=True):
     while True:
         for event in pg.event.get():
             [exit() for _ in ' ' if event.type == pg.QUIT]
+
             if event.type == pg.KEYDOWN:
                 for head in field.snake_heads:
-                    head.change_movement_direction(event.key)
+                    if not pause:
+                        head.change_movement_direction(event.key)
 
-        [head.move() for head in field.snake_heads]
-        field.update()
+                if event.key == pg.K_p:
+                    pause = not pause
+
+                if event.key == pg.K_r:
+                    field.reset_all()
+                    boosts.create_boost(3)
+
+                if event.key == pg.K_ESCAPE:
+                    exit()
+
+        if not pause:
+            [head.move() for head in field.snake_heads]
+            field.update()
 
         pg.display.set_caption(f'FPS: {clock.get_fps()}')
 
         if use_console and any([obj.is_alive for obj in field.snake_heads]):
             system('cls')
 
+            if pause:
+                sys.stdout.write(colored(51, 96, 255, 'PAUSE\n\n'))
+
             for head in field.snake_heads:
-                sys.stdout.writelines(f'Score: {colored(0, 127, 255, head.score)}\n'
+                sys.stdout.writelines(f'{colored(200, 255, 0, head.name)}:\t'
+                                      f'Score: {colored(0, 127, 255, head.score)} | '
                                       f'Tail length: {colored(127, 255, 63, len(head.tail.tail_elements_pos))}\n')
 
             # hint: here you can turn off the pretty print and turn on the debug print (False, True)
-            field.print(debug=False)
+            field.print()
 
-        time += 1
-        clock.tick()
+        if not pause:
+            time += 1
+        clock.tick(20)
 
 
 if __name__ == '__main__':
