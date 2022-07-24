@@ -32,11 +32,26 @@ def colored(r, g, b, text):
 
 
 class Field:
+    # hint: here you can change the empty space symbol and its color
+    empty_space_color = (127, 127, 127)
+    empty_space_character = '.'
+
     def __init__(self, shape: tuple[int, int], field_boundaries_is_deadly=False):
+        """
+        The function initializes the game field, the snake heads, the boosts, and the walls
+
+        :param shape: The shape of the field
+        :type shape: tuple[int, int]
+        :param field_boundaries_is_deadly: If True, the snake will die if it hits the field boundaries,
+        defaults to False (optional)
+        """
         self.__snake_heads = []
         self.__boosts = None
         self.__walls = None
-        self.__field = np.zeros(shape, dtype=np.int8)
+
+        self.__field_dtype = np.dtype([('color', int, (3,)), ('character', str, 1)])
+        self.__field = np.zeros(shape, dtype=self.__field_dtype)
+
         self.__field_boundaries_is_deadly = bool(field_boundaries_is_deadly)
 
     def __str__(self) -> str:
@@ -46,44 +61,43 @@ class Field:
         return f'Field({self.__field.shape})'
 
     def update(self):
-        self.__field[:] = np.zeros(self.__field.shape, dtype=np.int8)
+        self.__field[:] = np.zeros(self.__field.shape, dtype=self.__field_dtype)
 
         if self.boosts is not None:
             for boost in self.boosts.boosts:
                 if all(boost[:-1] != np.array([-1, -1])):
-                    self.field[boost[0], boost[1]] = boost[2] + 4
+                    self.field[boost[0], boost[1]][0] = Boosts.colors[boost[2]]
+                    self.field[boost[0], boost[1]][1] = Boosts.characters[boost[2]]
 
         for head in self.__snake_heads:
             if head.is_alive:
                 for element_pos in head.tail.tail_elements_pos:
                     if all(element_pos != np.array([-1, -1])):
-                        self.field[element_pos[0], element_pos[1]] = 2
+                        self.field[element_pos[0], element_pos[1]][0] = head.tail.color
+                        self.field[element_pos[0], element_pos[1]][1] = Tail.character
 
         for head in self.__snake_heads:
-            self.field[head.pos[0], head.pos[1]] = 1
+            self.field[head.pos[0], head.pos[1]][0] = head.color
+            self.field[head.pos[0], head.pos[1]][1] = Head.character
 
         if self.walls is not None:
             for wall in self.walls.walls_pos:
                 if all(wall != np.array([-1, -1])):
-                    self.field[wall[0], wall[1]] = 3
+                    self.field[wall[0], wall[1]][0] = Walls.color
+                    self.field[wall[0], wall[1]][1] = Walls.character
+
+        for index in range(self.__field.shape[0]):
+            for _index in range(self.__field.shape[1]):
+                if self.__field[index, _index][1] == '':
+                    self.__field[index, _index] = ([*Field.empty_space_color], Field.empty_space_character)
 
     def print(self, pretty_print=True, debug=False):
         if pretty_print:
-            # hint: here you can change the design {0: ' ', 1: '#', 2: '$', 3: colored(143, 213, 64, '%')...}
-            # *("colored" colors the text using RGB format colored(r, g, b, text))
-            character_replacement = {0: colored(127, 127, 127, '.'),
-                                     1: colored(4, 225, 1, '@'),
-                                     2: colored(34, 255, 31, '*'),
-                                     3: colored(255, 63, 15, '#'),
-                                     4: colored(15, 255, 63, '+'),
-                                     5: colored(63, 255, 255, '-'),
-                                     6: colored(255, 63, 255, '?'),
-                                     7: colored(63, 31, 255, '&')}
             str_field = '\n'
             for index in range(self.__field.shape[0]):
                 for _index in range(self.__field.shape[1]):
                     value = self.__field[index, _index]
-                    str_field = str_field + character_replacement.get(value, str(value)) + ' '
+                    str_field = str_field + colored(*value[0], value[1]) + ' '
                 str_field += '\n'
             sys.stdout.writelines(str_field)
 
@@ -236,12 +250,49 @@ class Field:
 class Head:
     __snakes_number: int = 0
 
+    # hint: here you can change the head symbol
+    character = '@'
+
+    @staticmethod
+    def generate_head_color():
+        random_color = np.random.randint(0, 255, 3, dtype=int)
+        while not 510 >= np.sum(random_color) >= 255:
+            random_color = np.random.randint(0, 255, 3, dtype=int)
+
+        return tuple(random_color)
+
     def __init__(self, _field: Field, pos=(0, 0), moves_per_second=4,
-                 controls=(pg.K_w, pg.K_s, pg.K_a, pg.K_d), name=None, contact_with_other_snakes=False):
+                 controls=(pg.K_w, pg.K_s, pg.K_a, pg.K_d), name=None, color=None, contact_with_other_snakes=False):
+        """
+        The function takes in a field, position, moves per second, controls, name, and color.
+
+        The function then creates a snake with the given parameters.
+
+        The function also creates a tail for the snake.
+
+        The function then returns the snake.
+
+        :param _field: Field - the field on which the snake is located
+        :type _field: Field
+        :param pos: the position of the head
+        :param moves_per_second: How many times the snake moves per second, defaults to 4 (optional)
+        :param controls: a tuple of 4 keys, which are used to control the snake
+        :param name: The name of the snake
+        :param color: The color of the snake's head
+        :param contact_with_other_snakes: If True, the snake will die if it touches another snake, defaults to False
+        (optional)
+        """
         if name is None:
-            self.__name = f'Snake{Head.__snakes_number}'
+            name = f'Snake{Head.__snakes_number}'
         else:
-            self.__name = str(name)
+            name = str(name)
+        self.__name = name
+
+        if color is None:
+            color = Head.generate_head_color()
+        else:
+            color = tuple(color)
+        self.__color = color
 
         Head.__snakes_number += 1
 
@@ -318,11 +369,12 @@ class Head:
 
             self.boosts.create_boost(boost_amount_to_be_created)
 
-            chance = (((self.field.field.size - self.field.walls.walls_pos.shape[0])
-                       / self.field.field.size)
-                      ** (len(self.field.snake_heads) + 1))
-            if np.random.choice([0, 1], 1, p=[1 - chance, chance]):
-                self.walls.create_wall(wall_amount_to_be_created)
+            if boost_type in range(3):
+                chance = (((self.field.field.size - self.field.walls.walls_pos.shape[0])
+                           / self.field.field.size)
+                          ** (len(self.field.snake_heads) + 1))
+                if np.random.choice([0, 1], 1, p=[1 - chance, chance]):
+                    self.walls.create_wall(wall_amount_to_be_created)
 
             self.moves_per_second += increase_speed
 
@@ -419,11 +471,28 @@ class Head:
     def contact_with_other_snakes(self):
         return self.__contact_with_other_snakes
 
+    @property
+    def color(self):
+        return self.__color
+
 
 class Tail:
+    # hint: here you can change the tail symbol
+    character = '*'
+
     def __init__(self, _head: Head):
         self.__head = _head
         self.__tail_elements_pos: np.array = np.array([[-1, -1]])
+
+        color = list(self.__head.color)
+
+        for index in range(3):
+            if color[index] + 64 > 255:
+                color[index] -= 64
+            else:
+                color[index] += 64
+
+        self.__color = tuple(color)
 
     def add_new_element(self, amount=1):
         if amount < 0:
@@ -468,18 +537,29 @@ class Tail:
 
         self.__tail_elements_pos = value
 
+    @property
+    def color(self):
+        return self.__color
+
 
 class Boosts:
+    # hint: here you can change the boost colors and symbols
+    colors = {0: (15, 255, 63),
+              1: (63, 255, 255),
+              2: (255, 63, 255),
+              3: (63, 31, 255)}
+    characters = {0: '+', 1: '-', 2: '?', 3: '&'}
+
     def __init__(self, _field: Field):
         self.__field = _field
         self.__field.boosts = self
         self.__boosts = np.empty(shape=(0, 3), dtype=int)
-        self.__boost_types_number = 4
+        self.__boost_types_number = max(len(Boosts.characters), len(Boosts.colors))
 
     def create_boost(self, amount=1, pos=None, boost_type=None):
         for _ in range(amount):
             if boost_type is None:
-                _boost_type = np.random.choice(self.__boost_types_number, 1, p=[.70, .15, .1, .05])
+                _boost_type = int(np.random.choice(self.__boost_types_number, 1, p=[.70, .15, .1, .05]))
             else:
                 _boost_type = boost_type
 
@@ -512,6 +592,10 @@ class Boosts:
 
 
 class Walls:
+    # hint: here you can change the walls color and symbol
+    color = (255, 63, 15)
+    character = '#'
+
     def __init__(self, _field: Field):
         self.__field = _field
         self.__field.walls = self
@@ -557,12 +641,12 @@ def main(use_console=True):
     # 2+ player mode may have some bugs
     '''
     hint:
-        here you can change the head position, its moves per second, its controls, name 
-        and turn on contacting with other snakes:
-            (field, (0, 0), 7, (pg.K_i, pg.K_k, pg.K_j, pg.K_l)).
+        here you can change the head position, its moves per second, its controls, name, 
+        color and turn on contacting with other snakes (all parameters after position are optional):
+            ...(field, (0, 0), 7, (pg.K_i, pg.K_k, pg.K_j, pg.K_l), 'God', (255, 255, 0), True).
     
         You can also add a new snake:
-            (Head(field, (11, 10), 1, (pg.K_w, pg.K_s, pg.K_a, pg.K_d))).
+            Head(field, (11, 10), 1, (pg.K_w, pg.K_s, pg.K_a, pg.K_d), 'Dog', (0, 0, 255), False).
     '''
     Head(field, (9, 9))
 
@@ -601,9 +685,11 @@ def main(use_console=True):
             system('cls')
 
             if pause:
-                sys.stdout.write(colored(51, 96, 255, 'PAUSE\n\n'))
+                sys.stdout.write(colored(51, 96, 255, 'PAUSE'))
 
             for head in field.snake_heads:
+                if pause:
+                    sys.stdout.write('\t')
                 sys.stdout.writelines(f'{colored(200, 255, 0, head.name)}:\t'
                                       f'Score: {colored(0, 127, 255, head.score)} | '
                                       f'Tail length: {colored(127, 255, 63, len(head.tail.tail_elements_pos))}\n')
