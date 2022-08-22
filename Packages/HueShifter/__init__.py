@@ -6,7 +6,7 @@ import numpy as np
 
 def rgb_to_hsv(rgb):
     # Translated from source of colorsys.rgb_to_hsv
-    # r,g,b should be a numpy arrays with values between 0 and 255
+    # r, g, b should be a numpy arrays with values between 0 and 255
     # rgb_to_hsv returns an array of floats between 0.0 and 1.0.
     rgb = rgb.astype('float')
     hsv = np.zeros_like(rgb)
@@ -32,7 +32,7 @@ def rgb_to_hsv(rgb):
 
 def hsv_to_rgb(hsv):
     # Translated from source of colorsys.hsv_to_rgb
-    # h,s should be a numpy arrays with values between 0.0 and 1.0
+    # h, s should be a numpy arrays with values between 0.0 and 1.0
     # v should be a numpy array with values between 0.0 and 255.0
     # hsv_to_rgb returns an array of units between 0 and 255.
     rgb = np.empty_like(hsv)

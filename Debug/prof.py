@@ -9,7 +9,8 @@ def profile(func, *args, **kwargs):
             pass
 
     stats = pstats.Stats(pr)
-    stats.sort_stats(pstats.SortKey.TIME)
+    stats.sort_stats(pstats.SortKey.CALLS)
+    stats.print_stats()
     stats.dump_stats(filename='stats.prof')
 
 

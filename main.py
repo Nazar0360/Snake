@@ -8,7 +8,8 @@ import pathlib as pl
 pg.init()
 clock = pg.time.Clock()
 
-error_texture = pg.image.load('Texture Packs/Default/error.png')
+error_texture = pg.image.load(pl.Path(__file__).parent.joinpath('Texture Packs').joinpath('Default').joinpath('error'
+                                                                                                              '.png'))
 texture_pack_name = 'Default'
 
 
@@ -26,15 +27,43 @@ def in_array(array, value):
     return list(value) in list(map(lambda x: list(x), array))
 
 
+def update_error_texture():
+    global error_texture
+
+    error_texture = get_texture('error.png')
+
+
 def pil_img2pg_img(img: Image):
     return pg.image.fromstring(img.tobytes(), img.size, img.mode)
 
 
-class Screen:
-    empty_space_texture = pg.image.load(f'Texture Packs/Default/empty_tile.png')
+def get_texture(texture, shift_hue2=None):
+    data_pack_path = pl.Path(__file__).parent.joinpath('Texture Packs').joinpath(texture_pack_name)
 
-    def __init__(self, shape: tuple[int, int], screen_boundaries_is_deadly=False, size_multiplier=50):
+    if not data_pack_path.exists():
+        return error_texture
+
+    texture_path = data_pack_path.joinpath(texture)
+
+    if not texture_path.exists():
+        return error_texture
+
+    if shift_hue2 is None:
+        return pg.image.load(texture_path)
+
+    else:
+        if not isinstance(shift_hue2, int) and not isinstance(shift_hue2, float):
+            shift_hue2 = 0
+
+        return pil_img2pg_img(shift_image_hue(str(texture_path), shift_hue2))
+
+
+class Screen:
+    empty_space_texture = get_texture('empty_tile')
+
+    def __init__(self, shape: tuple[int, int], screen_boundaries_is_deadly=False, size_multiplier=50, font_name=None):
         self.__snakes = []
+        self.__portals = []
         self.__boosts = None
         self.__walls = None
 
@@ -46,7 +75,10 @@ class Screen:
         self.__size_multiplier = size_multiplier
         self.__screen = pg.display.set_mode(tuple(np.array(self.field.shape) * self.__size_multiplier))
 
-        self.__font = pg.font.Font('./Fonts/fff-forward.regular.ttf', min(self.screen.get_size()) // 50)
+        if font_name is None or not pl.Path(__file__).parent.joinpath(f'Fonts/{font_name}').exists():
+            font_name = 'fff-forward.regular.ttf'
+        self.__font = pg.font.Font(pl.Path(__file__).parent.joinpath(f'Fonts/{font_name}'),
+                                   min(self.screen.get_size()) // 50)
 
     def __str__(self) -> str:
         return f'{self.__field}'
@@ -54,30 +86,32 @@ class Screen:
     def __repr__(self) -> str:
         return f'Screen({self.__field.shape})'
 
+    def write_to_the_field(self, _pos, _obj=0, _type=0):
+        if self.is_out_of_field(_pos) == (0, 0):
+            self.field[_pos[0], _pos[1]]['object'] = _obj
+            self.field[_pos[0], _pos[1]]['type'] = _type
+
     def update(self):
         self.__field[:] = np.zeros(self.__field.shape, dtype=self.__field_dtype)
 
         if self.boosts is not None:
             for boost in self.boosts.boosts:
-                if all(boost[:-1] != np.array([-1, -1])):
-                    self.field[boost[0], boost[1]]['object'] = self.boosts
-                    self.field[boost[0], boost[1]]['type'] = boost[2]
+                self.write_to_the_field(boost[0:2], self.boosts, boost[2])
 
         for snake in self.__snakes:
             for element_pos in snake.tail_elements_pos:
-                if all(element_pos != np.array([-1, -1])):
-                    self.field[element_pos[0], element_pos[1]]['object'] = snake
-                    self.field[element_pos[0], element_pos[1]]['type'] = 1
+                self.write_to_the_field(element_pos, snake, 1)
 
         for snake in self.__snakes:
-            self.field[snake.head_pos[0], snake.head_pos[1]]['object'] = snake
-            self.field[snake.head_pos[0], snake.head_pos[1]]['type'] = 0
+            self.write_to_the_field(snake.head_pos, snake, 0)
+
+        for portals in self.__portals:
+            for portal in portals.portals_pos:
+                self.write_to_the_field(portal, portals, 0)
 
         if self.walls is not None:
             for wall in self.walls.walls_pos:
-                if all(wall != np.array([-1, -1])):
-                    self.field[wall[0], wall[1]]['object'] = self.walls
-                    self.field[wall[0], wall[1]]['type'] = 0
+                self.write_to_the_field(wall, self.walls, 0)
 
     def add_snake(self, snake):
         if isinstance(snake, Snake):
@@ -85,53 +119,62 @@ class Screen:
         else:
             raise TypeError('snake must be an instance of Snake')
 
+    def add_portals(self, portals):
+        if isinstance(portals, Portals):
+            self.__portals.append(portals)
+        else:
+            raise TypeError('portals must be an instance of Portals')
+
     def check_for_objects_at_the_position(self, pos, current_snake=None) -> dict:
-        pos = np.array(pos)
+        pos = self.normalized_pos(pos)
         is_here_head = is_here_tail = False
         for snake in self.__snakes:
-            if (current_snake is not None and current_snake.contact_with_other_snakes) and snake is not current_snake:
-                is_here_head = all(snake.head_pos == pos) or is_here_head
-            elif current_snake is None:
-                is_here_head = all(snake.head_pos == pos) or is_here_head
+            if isinstance(self.field[pos[0], pos[1]]['object'], Snake):
+                if self.field[pos[0], pos[1]]['type'] == 0:
+                    if current_snake is None or current_snake.contact_with_other_snakes and snake is not current_snake:
+                        is_here_head = True
 
-            if current_snake is None or current_snake.contact_with_other_snakes:
-                tail_elements_pos = snake.tail_elements_pos
-                if snake.is_alive:
-                    tail_elements_pos = tail_elements_pos[1:]
-                is_here_tail = is_here_tail or in_array(tail_elements_pos, pos)
-            else:
-                tail_elements_pos = current_snake.tail_elements_pos[1:]
-                is_here_tail = is_here_tail or in_array(tail_elements_pos, pos)
+                elif self.field[pos[0], pos[1]]['type'] == 1:
+                    if current_snake is None or current_snake.contact_with_other_snakes:
+                        tail_elements_pos = snake.tail_elements_pos
+                        if snake.is_alive:
+                            tail_elements_pos = tail_elements_pos[1:]
+                        is_here_tail = is_here_tail or in_array(tail_elements_pos, pos)
+                    else:
+                        tail_elements_pos = current_snake.tail_elements_pos[1:]
+                        is_here_tail = is_here_tail or in_array(tail_elements_pos, pos)
 
-        is_here_boost = False
-        if self.boosts is not None:
-            for i in range(self.boosts.boost_types_number):
-                is_here_boost = in_array(self.boosts.boosts, np.append(pos, [i], 0))
-                if is_here_boost:
-                    break
+        is_here_boost = isinstance(self.field[pos[0], pos[1]]['object'], Boosts)
 
-        is_here_wall = False
-        if self.walls is not None:
-            is_here_wall = in_array(self.walls.walls_pos, pos)
+        is_here_wall = isinstance(self.field[pos[0], pos[1]]['object'], Walls)
 
-        return dict(head=is_here_head, tail=is_here_tail, boost=is_here_boost, wall=is_here_wall)
+        is_here_portal = isinstance(self.field[pos[0], pos[1]]['object'], Portals)
+
+        return dict(head=is_here_head, tail=is_here_tail, boost=is_here_boost, wall=is_here_wall, portal=is_here_portal)
+
+    def free_positions(self):
+        free_positions = np.stack(np.meshgrid(range(self.field.shape[0]), range(self.field.shape[1])),
+                                  -1).reshape(-1, 2)
+        indices_for_delete = []
+
+        for index, pos in enumerate(free_positions):
+            if any(self.check_for_objects_at_the_position(pos).values()):
+                indices_for_delete.append(index)
+
+        free_positions = np.delete(free_positions, indices_for_delete, 0)
+        return free_positions
 
     def field_is_filled(self):
-        for y in range(self.__field.shape[0]):
-            for x in range(self.__field.shape[1]):
-                if not any(self.check_for_objects_at_the_position((y, x)).values()):
-                    return False
+        if self.free_positions().size > 0:
+            return False
         return True
 
     def find_random_free_pos(self):
-        pos = np.random.randint(self.field.shape)
-
         if self.field_is_filled():
             return np.array([-1, -1], dtype=int)
 
-        while any(self.check_for_objects_at_the_position(pos).values()):
-            pos = np.random.randint(self.field.shape)
-        return pos
+        free_poses = self.free_positions()
+        return free_poses[np.random.randint(0, free_poses.shape[0])]
 
     def is_out_of_field(self, pos):
         """
@@ -149,7 +192,6 @@ class Screen:
                 direction[i] = 1
             elif pos[i] < 0:
                 direction[i] = -1
-
         return tuple(direction)
 
     def reset_all(self):
@@ -158,6 +200,9 @@ class Screen:
 
         self.boosts.reset()
         self.walls.reset()
+
+        for portals in self.portals:
+            portals.reset()
 
     def normalized_pos(self, pos) -> np.array:
         pos = np.array(pos)
@@ -170,6 +215,8 @@ class Screen:
         return pos
 
     def update_screen(self, pause=False):
+        self.update()
+
         mult = self.__size_multiplier
         self.__screen.fill((0, 0, 0))
 
@@ -240,6 +287,10 @@ class Screen:
             self.__walls = value
 
     @property
+    def portals(self):
+        return self.__portals
+
+    @property
     def screen_boundaries_is_deadly(self):
         return self.__screen_boundaries_is_deadly
 
@@ -260,18 +311,8 @@ class Snake:
     __snakes_number: int = 0
 
     @staticmethod
-    def get_texture_paths(texture_num: Literal[0, 1, 2, 3], _texture_pack_name: str = None):
-        if _texture_pack_name is None:
-            _texture_pack_name = texture_pack_name
-
-        data_pack_path = pl.Path(__file__).parent.joinpath('Texture Packs').joinpath(_texture_pack_name)
-
-        texture_paths_tuple = (data_pack_path.joinpath('snake_head_static.png'),
-                               data_pack_path.joinpath('snake_head_movement.png'),
-                               data_pack_path.joinpath('dead_head.png'),
-                               data_pack_path.joinpath('tail.png'))
-
-        return texture_paths_tuple[texture_num]
+    def should_move_n_times(pt, t, f, mps):
+        return mps*(t-pt)/f
 
     def __init__(self, _screen: Screen, pos=(0, 0), moves_per_second=4,
                  controls: str = None, name=None, hue=None, contact_with_other_snakes=False):
@@ -283,13 +324,13 @@ class Snake:
         self.__name = name
 
         if hue is None:
-            hue = np.random.randint(180)
+            hue = np.random.randint(181)
 
         self.__hue = hue
-        self.__head_static_texture = pil_img2pg_img(shift_image_hue(Snake.get_texture_paths(0), self.hue))
-        self.__head_movement_texture = pil_img2pg_img(shift_image_hue(Snake.get_texture_paths(1), self.hue))
-        self.__skull = pil_img2pg_img(shift_image_hue(Snake.get_texture_paths(2), self.hue))
-        self.__tail_texture = pil_img2pg_img(shift_image_hue(Snake.get_texture_paths(3), self.hue))
+        self.__head_static_texture = get_texture('snake_head_static.png', self.hue)
+        self.__head_movement_texture = get_texture('snake_head_movement.png', self.hue)
+        self.__skull = get_texture('dead_head.png', self.hue)
+        self.__tail_texture = get_texture('tail.png', self.hue)
 
         Snake.__snakes_number += 1
 
@@ -302,6 +343,7 @@ class Snake:
         self.__start_pos = self.__head_pos
         self.__tail_elements_pos: np.array = np.array([[-1, -1]])
         self.__movement: np.array = np.zeros(2, dtype=np.int8)
+        self.__last_movement_time: int = 0
 
         self.__contact_with_other_snakes = contact_with_other_snakes
 
@@ -323,14 +365,20 @@ class Snake:
     def move(self, time):
         fps = min(max(clock.get_fps(), 1), 10_000)
 
-        if fps > 0 == time % (fps // min(self.moves_per_second, int(fps))):
+        for _ in range(
+                int(np.floor(Snake.should_move_n_times(self.__last_movement_time, time, fps, self.moves_per_second)))):
             if not self.check_for_obstacle(self.next_pos()) and self.is_alive and any(self.movement != 0):
                 self.head_pos = (self.head_pos + self.movement)
+
+                if isinstance(portals := self.screen.field[self.head_pos[0], self.head_pos[1]]['object'], Portals):
+                    portals.teleport_snake(self, self.head_pos)
             elif self.check_for_obstacle(self.next_pos()):
                 self.__is_alive = False
 
             if not self.is_alive:
-                self.delete_last_element()
+                self.delete_last_element(minlen=0)
+
+            self.__last_movement_time = time
 
     def change_movement_direction(self, key):
         directions = {x: y for x, y in zip(self.__controls, [[-1, 0], [1, 0], [0, -1], [0, 1]])}
@@ -357,38 +405,21 @@ class Snake:
         for _ in range(amount):
             self.__tail_elements_pos = np.append([[-1, -1]], self.__tail_elements_pos, 0)
 
-    def delete_last_element(self, amount=1):
+    def delete_last_element(self, amount=1, minlen=1):
         if amount < 0:
             self.add_new_element(abs(amount))
             return
 
         for _ in range(amount):
-            if len(self.tail_elements_pos) > 1:
+            if len(self.tail_elements_pos) > minlen:
                 self.__tail_elements_pos = np.delete(self.tail_elements_pos, 0, 0)
 
     def eat(self):
         if self.screen.check_for_objects_at_the_position(self.head_pos)['boost']:
 
             boost_type = self.boosts.destroy_boost_at_pos(self.head_pos)
-            match boost_type:
-                case 0:
-                    self.add_new_element()
-                    self.__score += 1
 
-                case 1:
-                    self.delete_last_element()
-
-                case 2:
-                    efficiency = np.random.randint(-1, 1)
-                    elements_number = np.random.randint(-2, 2)
-                    self.add_new_element(elements_number)
-                    self.__score += elements_number + efficiency
-
-                case 3:
-                    wall_amount_to_be_destroyed = self.walls.walls_pos.size // 4
-                    self.walls.delete_random_wall(wall_amount_to_be_destroyed)
-
-                    self.__score -= wall_amount_to_be_destroyed // 2
+            self.boosts.give_boost(self, boost_type)
 
             self.boosts.create_boost(1)
 
@@ -424,18 +455,19 @@ class Snake:
                             rotating_angle = 180
 
                     texture = pg.transform.rotate(self.__head_movement_texture, rotating_angle)
-                    screen.blit(pg.transform.scale(texture, (size, size)), pos)
 
                 elif all(self.movement == (0, 0)):
-                    screen.blit(pg.transform.scale(self.__head_static_texture, (size, size)), pos)
+                    texture = self.__head_static_texture
 
                 else:
-                    screen.blit(pg.transform.scale(self.__skull, (size, size)), pos)
+                    texture = self.__skull
 
             case 1:
-                screen.blit(pg.transform.scale(self.__tail_texture, (size, size)), pos)
+                texture = self.__tail_texture
             case _:
-                screen.blit(pg.transform.scale(error_texture, (size, size)), pos)
+                texture = error_texture
+
+        screen.blit(pg.transform.scale(texture, (size, size)), pos)
 
     @property
     def head_pos(self):
@@ -502,6 +534,10 @@ class Snake:
     def score(self):
         return self.__score
 
+    @score.setter
+    def score(self, value):
+        self.__score = int(value)
+
     @property
     def start_pos(self):
         return self.__start_pos
@@ -526,9 +562,10 @@ class Snake:
     def hue(self, value):
         self.__hue = int(value)
 
-        self.__head_static_texture = pil_img2pg_img(shift_image_hue(Snake.get_texture_paths(0), self.hue))
-        self.__head_movement_texture = pil_img2pg_img(shift_image_hue(Snake.get_texture_paths(1), self.hue))
-        self.__tail_texture = pil_img2pg_img(shift_image_hue(Snake.get_texture_paths(2), self.hue))
+        self.__head_static_texture = get_texture('snake_head_static.png', self.hue)
+        self.__head_movement_texture = get_texture('snake_head_movement.png', self.hue)
+        self.__skull = get_texture('dead_head.png', self.hue)
+        self.__tail_texture = get_texture('tail.png', self.hue)
 
     @property
     def tail_elements_pos(self):
@@ -558,10 +595,9 @@ class Boosts:
         self.__screen.boosts = self
         self.__boosts = np.empty(shape=(0, 3), dtype=int)
 
-        self.__textures = (pg.image.load(f'Texture Packs/{texture_pack_name}/plus.png'),
-                           pg.image.load(f'Texture Packs/{texture_pack_name}/minus.png'),
-                           pg.image.load(f'Texture Packs/{texture_pack_name}/question_mark.png'),
-                           pg.image.load(f'Texture Packs/{texture_pack_name}/blue_cross.png'))
+        self.__textures: np.array = [get_texture(texture) for
+                                     texture in ['plus_boost.png', 'minus_boost.png',
+                                                 'random_boost.png', 'wall_destroyer_boost.png']]
 
         self.__boost_types_number = len(self.__textures)
 
@@ -594,6 +630,28 @@ class Boosts:
                 self.__boosts = np.delete(self.boosts, index, 0)
                 return boost_type
 
+    @staticmethod
+    def give_boost(snake: Snake, boost_type: int):
+        match boost_type:
+            case 0:
+                snake.add_new_element()
+                snake.score += 1
+
+            case 1:
+                snake.delete_last_element()
+
+            case 2:
+                efficiency = np.random.randint(-1, 1)
+                elements_number = np.random.randint(-2, 2)
+                snake.add_new_element(elements_number)
+                snake.score += elements_number + efficiency
+
+            case 3:
+                wall_amount_to_be_destroyed = snake.walls.walls_pos.size // 4
+                snake.walls.delete_random_wall(wall_amount_to_be_destroyed)
+
+                snake.score -= wall_amount_to_be_destroyed // 2
+
     def reset(self):
         self.__boosts = np.empty(shape=(0, 3), dtype=int)
 
@@ -622,7 +680,7 @@ class Walls:
         self.__walls_pos = np.empty(shape=(0, 2), dtype=int)
         self.__spawning_is_enabled = spawning_is_enabled
 
-        self.__texture = pg.image.load(f'Texture Packs/{texture_pack_name}/wall.png')
+        self.__texture = get_texture('wall.png')
 
     def create_wall(self, amount=1, pos=None):
         if amount < 0:
@@ -662,27 +720,109 @@ class Walls:
         return self.__walls_pos
 
 
+class Portals:
+    def __init__(self, _screen: Screen, hue=None, spawning_is_enabled=True):
+        self.__screen = _screen
+        self.__screen.add_portals(self)
+        self.__portals_pos = np.empty(shape=(0, 2), dtype=int)
+
+        self.__spawning_is_enabled = spawning_is_enabled
+
+        if hue is None:
+            hue = np.random.randint(181)
+
+        self.__hue = hue
+        self.__texture = get_texture('portal.png', hue)
+
+    def create_portal(self, amount=1, pos=None):
+        if amount < 0:
+            for _ in range(abs(amount)):
+                self.delete_portal_at_pos()
+
+        if self.__spawning_is_enabled:
+            for _ in range(amount):
+                if not pos:
+                    self.__screen.update()
+                    portal_pos = self.__screen.find_random_free_pos()
+                else:
+                    portal_pos = np.array(pos)
+
+                self.__portals_pos = np.append(self.__portals_pos, np.array([portal_pos]), 0)
+
+    def delete_portal_at_pos(self, pos=None):
+        if pos is None:
+            self.__portals_pos = np.delete(self.portals_pos, np.random.randint(len(self.portals_pos)), 0)
+            return
+
+        pos = np.array(pos)
+        if not isinstance(index := find(self.portals_pos, pos), list):
+            self.__portals_pos = np.delete(self.portals_pos, index, 0)
+
+    def teleport_snake(self, snake: Snake, portal_pos):
+        if (_len := len(self.portals_pos)) < 2:
+            if _len == 1:
+                self.delete_portal_at_pos(portal_pos)
+                self.create_portal()
+            return
+
+        self.delete_portal_at_pos(portal_pos)
+        teleport_to = self.portals_pos[np.random.randint(_len - 1)]
+        self.delete_portal_at_pos(teleport_to)
+        snake.head_pos = teleport_to
+        self.create_portal(2)
+
+    def draw(self, _type, pos, size):
+        if _type == 0:
+            texture = self.__texture
+        else:
+            texture = error_texture
+
+        texture = pg.transform.scale(texture, (size, size))
+        self.__screen.screen.blit(texture, pos)
+
+    def reset(self):
+        self.__portals_pos = np.empty(shape=(0, 2), dtype=int)
+
+    @property
+    def portals_pos(self):
+        return self.__portals_pos
+
+    @property
+    def hue(self):
+        return self.__hue
+
+    @hue.setter
+    def hue(self, value):
+        self.__hue = int(value)
+        self.__texture = get_texture('portal.png', self.hue)
+
+
 def main():
     global texture_pack_name
 
     import configparser
 
+    update_error_texture()
+
     config = configparser.ConfigParser()
-    config.read('config.ini')
+    config.read(pl.Path(__file__).parent.joinpath('config.ini'))
     config.read_dict({'Game': {'': ''},
                       'Screen': {'': ''},
                       'Snake': {'': ''},
                       'FirstSnake': {'': ''},
                       'SecondSnake': {'': ''},
+                      'ThirdSnake': {'': ''},
+                      'FourthSnake': {'': ''},
                       'Boosts': {'': ''},
-                      'Walls': {'': ''}})
+                      'Walls': {'': ''},
+                      'Portals': {'': ''}})
 
     time = 0
     pause = False
 
     game_config = config['Game']
 
-    fps = str2int(game_config.get('fps'), 30)
+    fps = str2float(game_config.get('fps'), 30)
 
     pause_key = ord(game_config.get('pause_key', 'p'))
     restart_key = ord(game_config.get('restart_key', 'r'))
@@ -692,41 +832,55 @@ def main():
     if not pl.Path(__file__).parent.joinpath('Texture Packs').joinpath(texture_pack_name).exists():
         texture_pack_name = 'Default'
 
-    Screen.empty_space_texture = pg.image.load(f'Texture Packs/{texture_pack_name}/empty_tile.png')
+    update_error_texture()
+
+    Screen.empty_space_texture = get_texture('empty_tile.png')
 
     screen_config = config['Screen']
 
     screen_shape = str2tuple(screen_config.get('shape'), int, (31, 31))
     screen = Screen(screen_shape,
                     str2bool(screen_config.get('screen_boundaries_is_deadly')),
-                    str2int(screen_config.get('size_multiplier'), int(961/(screen_shape[0]*screen_shape[1])**0.5)))
+                    str2int(screen_config.get('size_multiplier'),
+                            int(961 / (screen_shape[0] * screen_shape[1]) ** 0.5)),
+                    screen_config.get('font_name'))
 
     snakes_config = config['Snake']
 
-    # 2-player mode may have some bugs
-    two_player_mode = str2bool(snakes_config.get('two_player_mode'))
+    # 2+ player mode may have some bugs
+    snakes_count = min(max(str2int(snakes_config.get('snakes_count'), 1), 1), 4)
     first_snake_config = config['FirstSnake']
     second_snake_config = config['SecondSnake']
+    third_snake_config = config['ThirdSnake']
+    fourth_snake_config = config['FourthSnake']
 
-    if two_player_mode:
-        start_positions = (str2tuple(first_snake_config.get('start_position'), int, (0, 0)),
-                           str2tuple(second_snake_config.get('start_position'), int,
-                                     tuple(np.array(screen.field.shape) - 1)))
+    portals_config = config['Portals']
+    portals_amount = max(str2int(portals_config.get('portals_amount'), 2), 2)
+    portals_hue = [str2int(portals_config.get(f'portals{i}_hue'), None) for i in range(4)]
+    portals_spawning_is_enabled = str2bool(portals_config.get('spawning_is_enabled'))
 
-        Snake(screen, start_positions[0], str2int(first_snake_config.get('moves_per_second'), 4),
-              first_snake_config.get('controls', 'wsad'), first_snake_config.get('name'),
-              str2int(first_snake_config.get('hue'), None),
-              str2bool(first_snake_config.get('contact_with_other_snakes')))
-        Snake(screen, start_positions[1], str2int(second_snake_config.get('moves_per_second'), 4),
-              second_snake_config.get('controls', 'ARROWS'), second_snake_config.get('name'),
-              str2int(second_snake_config.get('hue'), None),
-              str2bool(second_snake_config.get('contact_with_other_snakes')))
-    else:
-        Snake(screen, (screen.field.shape[0] // 2, screen.field.shape[1] // 2),
-              str2int(first_snake_config.get('moves_per_second'), 4), first_snake_config.get('controls', 'wsad'),
-              first_snake_config.get('name'),
-              str2int(first_snake_config.get('hue'), None),
-              str2bool(first_snake_config.get('contact_with_other_snakes')))
+    right_down_corner = np.array(screen.field.shape) - 1
+    corner_pos = np.array([[[0, 0], [0, right_down_corner[1]]],
+                           [[right_down_corner[0], 0], [right_down_corner[0], right_down_corner[1]]]])
+
+    all_snakes_configs = [first_snake_config, second_snake_config, third_snake_config, fourth_snake_config]
+    default_snakes_controls = ['wsad', 'ARROWS', 'tgfh', 'ikjl']
+    snakes_pos = np.array([corner_pos[y, x] for y, x in zip([1, 0, 1, 0], [0, 1, 1, 0])])
+    snakes_params: np.array = np.array([
+        [screen for _ in range(4)],
+        [str2tuple(all_snakes_configs[i].get('start_position'), int, snakes_pos[i]) for i in range(4)],
+        [str2float(all_snakes_configs[i].get('moves_per_second'), 5) for i in range(4)],
+        [all_snakes_configs[i].get('controls', default_snakes_controls[i]) for i in range(4)],
+        [all_snakes_configs[i].get('name', f'Snake{i+1}') for i in range(4)],
+        [str2float(all_snakes_configs[i].get('hue'), None) for i in range(4)],
+        [str2bool(all_snakes_configs[i].get('contact_with_other_snakes'), False) for i in range(4)]
+    ])
+
+    for n in range(snakes_count):
+        Snake(*(snakes_params[i, n] for i in range(7)))
+
+    for n in range(snakes_count):
+        Portals(screen, portals_hue[n], portals_spawning_is_enabled).create_portal(portals_amount)
 
     boosts_config = config['Boosts']
 
@@ -737,7 +891,7 @@ def main():
 
     Walls(screen, str2bool(walls_config.get('spawning_is_enabled')))
 
-    start_amount_of_boosts = max(screen.field.shape[0] * screen.field.shape[1] // 108, 1 + int(two_player_mode))
+    start_amount_of_boosts = max(screen.field.shape[0] * screen.field.shape[1] // 108, snakes_count)
 
     if boosts_config.get('start_amount') != 'None':
         start_amount_of_boosts = str2int(boosts_config.get('start_amount'),
@@ -761,14 +915,14 @@ def main():
                     pause = False
                     screen.reset_all()
                     boosts.create_boost(start_amount_of_boosts)
+                    for portals in screen.portals:
+                        portals.create_portal(portals_amount)
 
                 if event.key == pg.K_ESCAPE:
                     exit()
 
         if not pause:
             [snake.move(time) for snake in screen.snakes]
-
-            screen.update()
 
         pg.display.set_caption(f'Snake game [FPS: {clock.get_fps()}]')
 
